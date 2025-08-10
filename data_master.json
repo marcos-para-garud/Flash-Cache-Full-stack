@@ -1,0 +1,37 @@
+{
+  "store": [
+    [
+      "counter:visits",
+      "1000"
+    ],
+    [
+      "user:1",
+      "John Doe"
+    ],
+    [
+      "user:2",
+      "John Doe"
+    ],
+    [
+      "test:fixed",
+      "replication works!"
+    ],
+    [
+      "test:newwwww",
+      "hello world"
+    ],
+    [
+      "test:partial",
+      "should be partial status"
+    ],
+    [
+      "test:key",
+      "hello world"
+    ],
+    [
+      "test:keyggj",
+      "hello world"
+    ]
+  ],
+  "expiry": []
+}
