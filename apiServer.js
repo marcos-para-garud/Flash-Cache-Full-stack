@@ -9,7 +9,9 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: process.env.NODE_ENV === 'production' 
+      ? ["https://flashcache-ui.onrender.com", "https://your-frontend-domain.onrender.com"]
+      : "*",
     methods: ["GET", "POST"]
   }
 });
@@ -2022,7 +2024,7 @@ app.get("/stats", (req, res) => {
   }
 });
 
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
 
 // Check if sample data should be initialized
 const shouldInitializeSampleData = process.env.INIT_SAMPLE_DATA === 'true' || 

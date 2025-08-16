@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon server.js",
+    "start": "node apiServer.js",
+    "dev": "nodemon server.js",
     "api": "node apiServer.js",
     "demo": "node apiServer.js --demo",
     "demo-launcher": "node start-demo.js",
@@ -18,8 +19,10 @@
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "node-fetch": "^3.3.2",
-    "nodemon": "^3.1.9",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
   }
 }
