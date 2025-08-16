@@ -2241,7 +2241,8 @@ async function startServer() {
     }
     
     server.listen(PORT, () => {
-      console.log(`API server running at http://localhost:${PORT}`);
+      const host = process.env.NODE_ENV === 'production' ? 'production' : 'localhost';
+      console.log(`API server running on port ${PORT} (${host})`);
       console.log(`WebSocket server running for Pub/Sub functionality`);
       
       if (shouldInitializeSampleData) {
