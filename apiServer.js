@@ -92,6 +92,37 @@ const channelCallbacks = new Map(); // `${socket.id}_${channel}` -> callback
 const channelNodes = new Map(); // `${socket.id}_${channel}` -> nodeName
 
 // =========================
+// Root Route
+// =========================
+
+// Root endpoint
+app.get("/", (req, res) => {
+  res.json({ 
+    message: "Flash Cache API Server", 
+    version: "1.0.0",
+    status: "running",
+    description: "Redis-like in-memory key-value store with clustering, TTL, pub/sub, and replication",
+    endpoints: {
+      health: "/api/info",
+      keys: "/api/keys", 
+      stats: "/api/stats",
+      serverStats: "/api/server-stats",
+      monitoring: "/api/monitoring/stats",
+      pubsub: "/api/pubsub/channels",
+      replication: "/api/replication/status"
+    },
+    features: [
+      "Clustered key-value storage",
+      "TTL (Time-To-Live) support", 
+      "Pub/Sub messaging",
+      "Master-Slave replication",
+      "Real-time monitoring",
+      "WebSocket connections"
+    ]
+  });
+});
+
+// =========================
 // Basic Key Operations
 // =========================
 
