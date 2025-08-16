@@ -29,8 +29,41 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Create cluster instance
-const cluster = new ClusterRedis(["node1", "node2", "node3"]);
+// Create cluster instance with error handling
+let cluster;
+try {
+  cluster = new ClusterRedis(["node1", "node2", "node3"]);
+  console.log("✅ ClusterRedis initialized successfully");
+} catch (error) {
+  console.error("❌ Failed to initialize ClusterRedis:", error.message);
+  console.log("🔄 Attempting to start with minimal cluster...");
+  
+  // Fallback: create a minimal cluster or exit gracefully
+  try {
+    const RedisClone = require("./redis");
+    cluster = {
+      nodes: {
+        node1: new RedisClone("node1"),
+        node2: new RedisClone("node2"), 
+        node3: new RedisClone("node3")
+      },
+      get: (key) => cluster.route(key).get(key),
+      set: (key, value, ttl) => cluster.route(key).set(key, value, ttl),
+      delete: (key) => cluster.route(key).delete(key),
+      route: (key) => {
+        // Simple hash-based routing
+        const hash = require('crypto').createHash('md5').update(key).digest('hex');
+        const nodeIndex = parseInt(hash.substr(0, 8), 16) % 3;
+        const nodeName = ['node1', 'node2', 'node3'][nodeIndex];
+        return cluster.nodes[nodeName];
+      }
+    };
+    console.log("✅ Fallback cluster initialized");
+  } catch (fallbackError) {
+    console.error("❌ Complete cluster initialization failure:", fallbackError.message);
+    process.exit(1);
+  }
+}
 
 // Track server statistics
 const serverStats = {
@@ -104,6 +137,16 @@ const channelNodes = new Map(); // `${socket.id}_${channel}` -> nodeName
 // Root Route
 // =========================
 
+// Health check endpoint for Render
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    port: PORT
+  });
+});
+
 // Root endpoint
 app.get("/", (req, res) => {
   res.json({ 
@@ -112,7 +155,8 @@ app.get("/", (req, res) => {
     status: "running",
     description: "Redis-like in-memory key-value store with clustering, TTL, pub/sub, and replication",
     endpoints: {
-      health: "/api/info",
+      health: "/health",
+      apiHealth: "/api/info",
       keys: "/api/keys", 
       stats: "/api/stats",
       serverStats: "/api/server-stats",

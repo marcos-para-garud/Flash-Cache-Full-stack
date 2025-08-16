@@ -18,14 +18,41 @@ class RedisClone{
          this.maxSize = maxSize;
          this.channels = new Map();
 
-         this.ttlWorker = new Worker(path.join(__dirname, "ttlWorker.js"));
-         this.ttlWorker.on("message", (message) => {
-             if (message.type === "delete") {
-                 this.delete(message.key, false);
-             }
-         });
+         // Initialize TTL Worker with error handling
+         try {
+             this.ttlWorker = new Worker(path.join(__dirname, "ttlWorker.js"));
+             this.ttlWorker.on("message", (message) => {
+                 if (message.type === "delete") {
+                     this.delete(message.key, false);
+                 }
+             });
+             
+             this.ttlWorker.on("error", (error) => {
+                 console.warn("TTL Worker error, falling back to setTimeout:", error.message);
+                 this.ttlWorker = null;
+             });
+             
+             this.workerAvailable = true;
+         } catch (error) {
+             console.warn("Worker Threads not available, using fallback TTL mechanism:", error.message);
+             this.ttlWorker = null;
+             this.workerAvailable = false;
+         }
 
-         this.rdbWorker = fork(path.join(__dirname, "rdbWorker.js"));
+         // Initialize RDB Worker with error handling
+         try {
+             this.rdbWorker = fork(path.join(__dirname, "rdbWorker.js"));
+             this.rdbWorkerAvailable = true;
+             
+             this.rdbWorker.on("error", (error) => {
+                 console.warn("RDB Worker error, falling back to synchronous saves:", error.message);
+                 this.rdbWorkerAvailable = false;
+             });
+         } catch (error) {
+             console.warn("Child Process not available for RDB, using synchronous saves:", error.message);
+             this.rdbWorker = null;
+             this.rdbWorkerAvailable = false;
+         }
     }
 
 
@@ -104,7 +131,15 @@ class RedisClone{
     loadFromFile() {
         if (fs.existsSync(this.filePath)) {
             try {
-                const data = JSON.parse(fs.readFileSync(this.filePath, "utf-8"));
+                const fileContent = fs.readFileSync(this.filePath, "utf-8");
+                
+                // Check if file is empty or only whitespace
+                if (!fileContent.trim()) {
+                    console.log(`RDB file ${this.filePath} is empty, starting with fresh data`);
+                    return;
+                }
+                
+                const data = JSON.parse(fileContent);
 
                 this.store = new Map(data.store);
                 this.expiry = new Map(data.expiry);
@@ -113,14 +148,28 @@ class RedisClone{
                 this.expiry.forEach((expireAt, key) => {
                     const timeLeft = expireAt - Date.now();
                     if (timeLeft > 0) {
-                       // setTimeout(() => this.delete(key), timeLeft);
-                       this.ttlWorker.postMessage({ type: "setTTL", key, ttl: timeLeft / 1000 });
+                        // Try to use worker, fallback to setTimeout
+                        if (this.ttlWorker && this.workerAvailable) {
+                            try {
+                                this.ttlWorker.postMessage({ type: "setTTL", key, ttl: timeLeft / 1000 });
+                            } catch (error) {
+                                console.warn("Worker not available, using setTimeout fallback");
+                                setTimeout(() => this.delete(key), timeLeft);
+                            }
+                        } else {
+                            // Fallback to setTimeout
+                            setTimeout(() => this.delete(key), timeLeft);
+                        }
                     } else {
                         this.delete(key);
                     }
                 });
             } catch (error) {
-                console.error("Error loading RDB file:", error);
+                console.error("Error loading RDB file:", error.message);
+                console.log(`Corrupted RDB file ${this.filePath}, starting with fresh data`);
+                // Initialize with empty data structures
+                this.store = new Map();
+                this.expiry = new Map();
             }
         }
     }
@@ -166,8 +215,15 @@ class RedisClone{
             this.expiry.set(key, expireAt);
             setTimeout(() => this.delete(key), ttl * 1000); // Auto-delete key when TTL expires
             
-            // Also notify TTL worker for additional handling
-            this.ttlWorker.postMessage({ type: "setTTL", key, ttl });
+            // Also notify TTL worker for additional handling if available
+            if (this.ttlWorker && this.workerAvailable) {
+                try {
+                    this.ttlWorker.postMessage({ type: "setTTL", key, ttl });
+                } catch (error) {
+                    console.warn("Failed to notify TTL worker for SET operation:", error.message);
+                    this.workerAvailable = false;
+                }
+            }
         }
         
         this.saveToFile(); 
@@ -206,9 +262,17 @@ class RedisClone{
     delete(key, notifyWorker = true) {
       const deleted = this.store.delete(key);
       this.expiry.delete(key);
-      if (notifyWorker) {
-          this.ttlWorker.postMessage({ type: "delete", key });
+      
+      // Only notify worker if it's available and notifyWorker is true
+      if (notifyWorker && this.ttlWorker && this.workerAvailable) {
+          try {
+              this.ttlWorker.postMessage({ type: "delete", key });
+          } catch (error) {
+              console.warn("Failed to notify TTL worker:", error.message);
+              this.workerAvailable = false;
+          }
       }
+      
       this.replicate("delete", [key]);
       this.saveToFile();
       return deleted ? "1" : "0";
