@@ -132,6 +132,7 @@ function getErrorStatusCode(error) {
 const subscriptions = new Map(); // channel -> Set of socket.id
 const channelCallbacks = new Map(); // `${socket.id}_${channel}` -> callback
 const channelNodes = new Map(); // `${socket.id}_${channel}` -> nodeName
+const connectedUsers = new Map(); // socket.id -> user info
 
 // =========================
 // Root Route
@@ -513,15 +514,26 @@ app.post("/api/pubsub/publish", (req, res) => {
   try {
     const { channel, message } = req.body;
     
-    // Publish to the specific node that handles this channel (node1)
-    const targetNode = cluster.nodes.node1;
+    // Collect WebSocket recipients
+    const recipients = [];
     let totalSubscribers = 0;
     
-    if (targetNode) {
-      totalSubscribers = targetNode.publish(channel, message);
+    if (subscriptions.has(channel)) {
+      for (const socketId of subscriptions.get(channel)) {
+        const userInfo = connectedUsers.get(socketId);
+        const userDisplay = userInfo ? userInfo.username : 'Anonymous';
+        recipients.push(userDisplay);
+      }
+      totalSubscribers = subscriptions.get(channel).size;
     }
     
-    // Emit to WebSocket clients in the channel room
+    // Log batched message forwarding
+    if (recipients.length > 0) {
+      console.log(`📤 Forwarding message to clients [${recipients.join(', ')}]: ${message}`);
+    }
+    
+    // Use ONLY Socket.IO room system to avoid duplicate messages
+    // (Remove Redis pub/sub path that was causing duplicates)
     io.to(channel).emit('message', { channel, message, timestamp: new Date() });
     
     res.json({ success: true, data: { subscribers: totalSubscribers } });
@@ -1318,12 +1330,27 @@ app.post("/api/replication/cleanup-zombie-slaves", (req, res) => {
 // =========================
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
+  const instanceId = socket.handshake.query.instanceId || 'unknown';
+  const timestamp = socket.handshake.query.timestamp || 'unknown';
+  console.log(`🔗 Client connected: ${socket.id} (instance: ${instanceId}, timestamp: ${timestamp})`);
   serverStats.connectedClients++;
+  
+  // Handle user identification
+  socket.on('identify', (userData) => {
+    const userInfo = {
+      username: userData.username || 'Anonymous',
+      connectedAt: new Date(),
+      lastActivity: new Date()
+    };
+    connectedUsers.set(socket.id, userInfo);
+    console.log(`👤 Client ${socket.id} identified as: ${userInfo.username}`);
+  });
   
   // Handle subscription
   socket.on('subscribe', (channel) => {
-    console.log(`Client ${socket.id} subscribing to channel: ${channel}`);
+    const userInfo = connectedUsers.get(socket.id);
+    const userDisplay = userInfo ? `${userInfo.username} (${socket.id})` : socket.id;
+    console.log(`📺 Client ${userDisplay} subscribing to channel: ${channel}`);
     
     // Check if already subscribed
     const callbackKey = `${socket.id}_${channel}`;
@@ -1344,7 +1371,7 @@ io.on('connection', (socket) => {
     
     if (targetNode) {
       const callback = (message) => {
-        console.log(`Forwarding message to client ${socket.id}: ${message}`);
+        // Individual message forwarding (logging handled at publish level)
         socket.emit('message', { channel, message, timestamp: new Date() });
       };
       
@@ -1357,7 +1384,9 @@ io.on('connection', (socket) => {
         
         // Join the Socket.IO room for this channel
         socket.join(channel);
-        console.log(`Client ${socket.id} subscribed to channel: ${channel} on node1 and joined room`);
+        const userInfo = connectedUsers.get(socket.id);
+        const userDisplay = userInfo ? `${userInfo.username} (${socket.id})` : socket.id;
+        console.log(`✅ Client ${userDisplay} subscribed to channel: ${channel} on node1 and joined room`);
         socket.emit('subscribed', { channel, success: true });
         
         // Notify all clients about updated subscriber count
@@ -1422,7 +1451,10 @@ io.on('connection', (socket) => {
 
   // Handle disconnection
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
+    const userInfo = connectedUsers.get(socket.id);
+    const userDisplay = userInfo ? `${userInfo.username} (${socket.id})` : socket.id;
+    console.log(`❌ Client disconnected: ${userDisplay}`);
+    connectedUsers.delete(socket.id); // Clean up user tracking
     serverStats.connectedClients--;
     
     // Clean up all subscriptions for this client

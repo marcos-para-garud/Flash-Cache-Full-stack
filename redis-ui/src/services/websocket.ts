@@ -1,5 +1,49 @@
 import { io, Socket } from 'socket.io-client';
 
+// Global tracker to prevent multiple WebSocket connections per user session
+const globalConnectionTracker = {
+  activeConnections: new Set<string>(),
+  pendingConnections: new Set<string>(),
+  userConnections: new Map<string, string>(), // username -> instanceId
+  
+  addConnection: (instanceId: string, username?: string) => {
+    globalConnectionTracker.activeConnections.add(instanceId);
+    if (username) {
+      // Check if this user already has a connection
+      const existingInstanceId = globalConnectionTracker.userConnections.get(username);
+      if (existingInstanceId && existingInstanceId !== instanceId) {
+        console.warn(`⚠️ User ${username} already has connection ${existingInstanceId}, but creating ${instanceId}`);
+      }
+      globalConnectionTracker.userConnections.set(username, instanceId);
+    }
+    console.log(`📊 Active connections: ${globalConnectionTracker.activeConnections.size}`, Array.from(globalConnectionTracker.activeConnections));
+    console.log(`👥 User connections:`, Array.from(globalConnectionTracker.userConnections.entries()));
+  },
+  
+  removeConnection: (instanceId: string) => {
+    globalConnectionTracker.activeConnections.delete(instanceId);
+    globalConnectionTracker.pendingConnections.delete(instanceId);
+    // Remove from user connections
+    for (const [username, connectedInstanceId] of globalConnectionTracker.userConnections.entries()) {
+      if (connectedInstanceId === instanceId) {
+        globalConnectionTracker.userConnections.delete(username);
+        break;
+      }
+    }
+    console.log(`📊 Active connections: ${globalConnectionTracker.activeConnections.size}`, Array.from(globalConnectionTracker.activeConnections));
+  },
+  
+  shouldAllowConnection: (instanceId: string): boolean => {
+    // Only allow connection if we don't have too many pending
+    if (globalConnectionTracker.pendingConnections.size >= 2) {
+      console.warn(`🚫 Too many pending connections (${globalConnectionTracker.pendingConnections.size}), blocking ${instanceId}`);
+      return false;
+    }
+    globalConnectionTracker.pendingConnections.add(instanceId);
+    return true;
+  }
+};
+
 export interface PubSubMessage {
   id: string;
   channel: string;
@@ -27,14 +71,38 @@ class WebSocketService {
   private reconnectDelay = 1000;
   private mainMessageHandler: ((message: PubSubMessage) => void) | null = null;
   private handlersSetup = false; // Track if event handlers are already set up
+  private instanceId: string; // Unique identifier for this instance
 
-  constructor() {
-    this.connect();
+  constructor(forceNewConnection: boolean = false) {
+    // Add a unique identifier for this instance
+    this.instanceId = Math.random().toString(36).substr(2, 9);
+    console.log(`🆕 Creating WebSocket service instance: ${this.instanceId}`);
+    
+    // Check if we should allow this connection
+    if (!globalConnectionTracker.shouldAllowConnection(this.instanceId)) {
+      console.warn(`🚫 Connection blocked for instance: ${this.instanceId}`);
+      return;
+    }
+    
+    globalConnectionTracker.addConnection(this.instanceId);
+    this.connect(forceNewConnection);
   }
 
-  private connect() {
+  private connect(forceNewConnection: boolean = false) {
+    // Prevent duplicate connections
+    if (this.socket && this.socket.connected && !forceNewConnection) {
+      console.log(`⚠️ WebSocket already connected (instance: ${this.instanceId}), skipping duplicate connection`);
+      return;
+    }
+    
+    // Disconnect existing connection before creating new one
+    if (this.socket) {
+      console.log(`🔄 Disconnecting existing socket before creating new connection (instance: ${this.instanceId})`);
+      this.socket.disconnect();
+    }
+    
     const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-    console.log('Socket.IO connecting to:', apiUrl);
+    console.log(`Socket.IO connecting to: ${apiUrl} (instance: ${this.instanceId})`);
     
     this.socket = io(apiUrl, {
       transports: ['websocket'],
@@ -42,8 +110,17 @@ class WebSocketService {
       reconnection: true,
       reconnectionAttempts: this.maxReconnectAttempts,
       reconnectionDelay: this.reconnectDelay,
-      secure: apiUrl.startsWith('https://'), // Enable secure connection for HTTPS
-      rejectUnauthorized: false // For development/self-signed certificates
+      secure: apiUrl.startsWith('https://'),
+      rejectUnauthorized: false,
+      // Add query to help distinguish connections
+      query: {
+        instanceId: this.instanceId,
+        timestamp: Date.now().toString()
+      },
+      // Force new connection for multiple tabs
+      forceNew: forceNewConnection,
+      // Enable multiplexing but with unique namespace
+      multiplex: true
     });
 
     this.setupEventHandlers();
@@ -59,6 +136,11 @@ class WebSocketService {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
       this.connectionHandlers.forEach(handler => handler(true));
+      
+      // Send user identification when connected
+      const username = localStorage.getItem('pubsub-username') || 'Anonymous';
+      this.socket?.emit('identify', { username });
+      console.log(`🔗 Socket.IO identified as: ${username}`);
     });
 
     this.socket.on('disconnect', () => {
@@ -142,6 +224,14 @@ class WebSocketService {
         this.connectionHandlers.forEach(handler => handler(false));
       }
     });
+  }
+
+  // Update user identification
+  updateUsername(username: string): void {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('identify', { username });
+      console.log(`🔄 Username updated to: ${username}`);
+    }
   }
 
   // Channel management
@@ -329,12 +419,15 @@ class WebSocketService {
 
   disconnect() {
     if (this.socket) {
+      console.log(`🔌 Disconnecting WebSocket service instance: ${this.instanceId}`);
       this.socket.disconnect();
       this.socket = null;
       this.handlersSetup = false; // Reset handlers setup flag
+      globalConnectionTracker.removeConnection(this.instanceId);
     }
   }
 }
 
-export const webSocketService = new WebSocketService();
-export default webSocketService; 
+// Export only the class, no global singleton to prevent multiple connections
+export { WebSocketService };
+export default WebSocketService; 

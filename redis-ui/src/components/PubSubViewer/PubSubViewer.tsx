@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Send, MessageSquare, Users, Plus, Trash2, Radio, Volume2, VolumeX, Wifi, WifiOff, User, Edit3 } from 'lucide-react';
 import { apiService } from '../../services/api';
-import webSocketService, { PubSubMessage, Channel } from '../../services/websocket';
+import { WebSocketService, PubSubMessage, Channel } from '../../services/websocket';
+import { useAppStore } from '../../store';
 
 const PubSubViewer: React.FC = () => {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -15,6 +16,69 @@ const PubSubViewer: React.FC = () => {
   const [loadingChannels, setLoadingChannels] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const soundEnabledRef = useRef(soundEnabled);
+  
+  // Get global store actions
+  const { setConnectionStatus } = useAppStore();
+  
+  // Create a dedicated WebSocket service instance (StrictMode-safe with session singleton)
+  const webSocketServiceRef = useRef<WebSocketService | null>(null);
+  
+  // Use session-based singleton to prevent StrictMode double connections
+  const getOrCreateWebSocketService = useCallback(() => {
+    // Get existing service from window/session if available
+    if (typeof window !== 'undefined') {
+      const sessionKey = `webSocketService_${window.location.pathname}`;
+      
+      // Check if we already have a service for this route in this session
+      if (!(window as any)[sessionKey]) {
+        console.log('🆕 Creating new session WebSocket service for PubSubViewer');
+        console.log('🐛 Debug info:', {
+          componentRender: new Date().toISOString(),
+          pathname: window.location.pathname,
+          sessionKey,
+          tabId: sessionStorage.getItem('tabId') || 'new-tab'
+        });
+        
+        // Set a unique tab ID if not exists
+        if (!sessionStorage.getItem('tabId')) {
+          const tabId = Math.random().toString(36).substr(2, 9);
+          sessionStorage.setItem('tabId', tabId);
+          console.log('📑 New tab ID created:', tabId);
+        }
+        
+        (window as any)[sessionKey] = new WebSocketService(true);
+      } else {
+        console.log('♻️ Reusing existing session WebSocket service');
+      }
+      
+      return (window as any)[sessionKey];
+    }
+    
+    // Fallback for SSR/non-browser environments
+    if (!webSocketServiceRef.current) {
+      webSocketServiceRef.current = new WebSocketService(true);
+    }
+    return webSocketServiceRef.current;
+  }, []);
+  
+  const webSocketService = getOrCreateWebSocketService();
+  
+  // Setup page close cleanup
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      console.log('🚪 Page closing - disconnecting WebSocket');
+      if (webSocketService) {
+        webSocketService.disconnect();
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      console.log('🧹 Component unmounting - removing beforeunload listener');
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [webSocketService]);
 
   // Update ref when soundEnabled changes
   useEffect(() => {
@@ -53,6 +117,8 @@ const PubSubViewer: React.FC = () => {
       localStorage.setItem('pubsub-username', tempUsername.trim());
       setIsEditingUsername(false);
       console.log(`🏷️ Username updated to: ${tempUsername.trim()}`);
+      // Notify the WebSocket service about the username change
+      webSocketService.updateUsername(tempUsername.trim());
     }
   };
 
@@ -111,9 +177,20 @@ const PubSubViewer: React.FC = () => {
     // Subscribe to connection status changes
     const handleConnectionChange = (isConnected: boolean) => {
       setConnected(isConnected);
+      // Also update global connection status for Header display
+      setConnectionStatus({ 
+        connected: isConnected, 
+        reconnecting: false,
+        lastConnected: isConnected ? new Date() : undefined 
+      });
+      console.log(`🔄 Updated global connection status: ${isConnected ? 'Connected' : 'Disconnected'}`);
     };
 
     const connectionCleanup = webSocketService.onConnectionChange(handleConnectionChange);
+    
+    // Set initial connection status
+    const initialStatus = webSocketService.isConnected();
+    handleConnectionChange(initialStatus);
 
     return () => {
       connectionCleanup();

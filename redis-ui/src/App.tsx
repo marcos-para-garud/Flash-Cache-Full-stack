@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useAppStore } from './store';
+import { useApiConnection } from './hooks/useApiConnection';
 import Layout from './components/Layout/Layout';
 import KeyExplorer from './components/KeyExplorer/KeyExplorer';
 import ClusterView from './components/ClusterView/ClusterView';
@@ -16,6 +17,9 @@ import ProcessMonitor from './components/ProcessMonitor/ProcessMonitor';
 function App() {
   const { theme } = useAppStore();
   // const { isConnected } = useWebSocket(); // Commented out to fix eslint warning
+  
+  // Monitor API connection as fallback when WebSocket is not available
+  useApiConnection();
 
   useEffect(() => {
     // Apply theme to document
