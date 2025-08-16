@@ -2,7 +2,24 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store';
 import { WebSocketMessage } from '../types';
 
-export const useWebSocket = (url: string = 'ws://localhost:3001') => {
+export const useWebSocket = (url?: string) => {
+  // Dynamically determine WebSocket URL based on environment
+  const getWebSocketUrl = () => {
+    if (url) return url;
+    
+    const apiUrl = process.env.REACT_APP_WS_URL || process.env.REACT_APP_API_URL || 'http://localhost:3001';
+    
+    // Convert HTTP/HTTPS to WS/WSS
+    if (apiUrl.startsWith('https://')) {
+      return apiUrl.replace('https://', 'wss://');
+    } else if (apiUrl.startsWith('http://')) {
+      return apiUrl.replace('http://', 'ws://');
+    }
+    
+    return apiUrl;
+  };
+  
+  const wsUrl = getWebSocketUrl();
   const [isConnected, setIsConnected] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isDisabled, setIsDisabled] = useState(false);
@@ -15,7 +32,8 @@ export const useWebSocket = (url: string = 'ws://localhost:3001') => {
 
   const connect = () => {
     try {
-      ws.current = new WebSocket(url);
+      console.log('Connecting to WebSocket:', wsUrl);
+      ws.current = new WebSocket(wsUrl);
       setIsReconnecting(false);
 
       ws.current.onopen = () => {

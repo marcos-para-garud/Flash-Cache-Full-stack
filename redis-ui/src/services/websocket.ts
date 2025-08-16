@@ -34,6 +34,7 @@ class WebSocketService {
 
   private connect() {
     const apiUrl = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+    console.log('Socket.IO connecting to:', apiUrl);
     
     this.socket = io(apiUrl, {
       transports: ['websocket'],
@@ -41,6 +42,8 @@ class WebSocketService {
       reconnection: true,
       reconnectionAttempts: this.maxReconnectAttempts,
       reconnectionDelay: this.reconnectDelay,
+      secure: apiUrl.startsWith('https://'), // Enable secure connection for HTTPS
+      rejectUnauthorized: false // For development/self-signed certificates
     });
 
     this.setupEventHandlers();
