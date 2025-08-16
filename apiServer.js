@@ -7,17 +7,26 @@ const { SampleDataPopulator } = require("./populateSampleData");
 
 const app = express();
 const server = http.createServer(app);
+// Configure CORS origins dynamically
+const corsOrigins = process.env.NODE_ENV === 'production' 
+  ? [
+      process.env.FRONTEND_URL || "https://flashcache-ui.onrender.com",
+      // Add your actual frontend URL here after deployment
+    ].filter(Boolean) // Remove any undefined values
+  : "*"; // Allow all origins in development
+
 const io = socketIo(server, {
   cors: {
-    origin: process.env.NODE_ENV === 'production' 
-      ? ["https://flashcache-ui.onrender.com", "https://your-frontend-domain.onrender.com"]
-      : "*",
+    origin: corsOrigins,
     methods: ["GET", "POST"]
   }
 });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: corsOrigins,
+  credentials: true
+}));
 app.use(express.json());
 
 // Create cluster instance
